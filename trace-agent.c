@@ -109,6 +109,7 @@ int main(int argc, char *argv[])
 	int to = -1;
 	int result = EXIT_SUCCESS;
 	size_t toRead;
+	size_t toWrite;
 	ssize_t readData;
 	ssize_t sizeWritten = 0;
 	loff_t off_in = 0;
@@ -200,9 +201,6 @@ int main(int argc, char *argv[])
 	pollAct.sa_flags = SA_SIGINFO;
 	sigaction(SIGIO, &pollAct, NULL);
 	
-	/* SE PARE CA SPLICE-U MERGE DOAR INTRE PIPE */
-	//readData = splice(from, &off_in, to, &off_out, getpagesize(), SPLICE_F_MOVE);
-	
 	// interrupt loop at page granularity
 	do {
 		// prepare for new page
@@ -233,15 +231,17 @@ int main(int argc, char *argv[])
 			break;			// main loop
 		
 		// log useful bytes in this page
+		progress += readData;
 		useful += head->commit & ~RB_MISSED_FLAGS;
 		missed |= !!(head->commit & RB_MISSED_EVENTS);
 		
-		// prepare for new write
+		// send just the useful part of a trace page
+		toWrite = sizeof(struct trace_page_header) + (head->commit & ~RB_MISSED_FLAGS);
 		sizeWritten = 0;
 		
 		do {
 			// finish sending even if SIGINT, then end the loop
-			result = write(to, buf + sizeWritten, readData - sizeWritten);
+			result = write(to, buf + sizeWritten, toWrite - sizeWritten);
 			if (result == -1) {
 				if (errno == EINTR)
 					continue;	// inner loop
@@ -252,12 +252,12 @@ int main(int argc, char *argv[])
 			}
 			else
 				sizeWritten += result;
-		} while (sizeWritten < readData);
-		
-		// log readData data
-		progress += readData;
+		} while (sizeWritten < toWrite);
 		
 		fsync(to);
+		
+		// TODO: implement sleeping logic to balance network traffic
+		
 	} while (!interrupted);
 
 exit:
